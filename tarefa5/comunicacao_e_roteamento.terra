@@ -2,117 +2,170 @@
 
 #define DIR_SAIDA 0
 #define DIR_ENTRADA 1
-#define TIPO_RECONHECIMENTO 0
-#define TIPO_MOSTRAR_CAMINHO 1
+#define TIPO_PEDIDO 0
+#define TIPO_RESPOSTA 1
+#define TIPO_MOSTRAR_CAMINHO 2
 
-pktype usrMsg from radioMsg with
-    var ushort distancia;
-    var ushort versao;
-    var ubyte direcao;
-    var ushort origem;
-    var ubyte acenderLeds;
+pktype tipoMensagem from radioMsg with
+	var ushort versao;
+	var ushort remetente;
+	var ushort destinatario;
+	var ushort acender_leds;
+	var ubyte distancia;
+	var ubyte direcao;
 end
 
-var ushort nodeId = getNodeId();
-var ushort voltagem = 0;
-var ushort menorDistancia = 10000;
-var ushort melhorVizinho = 0;
-var ushort versaoLocal = 0;
-var ubyte acenderLeds = 0;
-var usrMsg sndData;
-
-sndData.target = BROADCAST;
-sndData.source = nodeId;
-sndData.origem = nodeId;
+var ushort id = getNodeId();
+var ushort versao = 0;
+var ushort destinatario = 0;
+var ushort acender_leds = 0;
+var ushort leds = 0;
+var ubyte melhorDistancia = 255;
+var ubyte melhorVizinho = 0;
 
 par do
-    loop do
-        par/and do
-            emit REQ_VOLTS();
-            voltagem = await VOLTS;
-            if voltagem <= 990 or voltagem >= 1010 then
-                emit LED0(ON);
-                
-                inc versaoLocal;
-                sndData.versao = versaoLocal;
-                
-                sndData.distancia = 0;
-                inc sndData.distancia;
-                
-                sndData.origem = nodeId;
-                sndData.direcao = DIR_SAIDA;
-                sndData.type = TIPO_RECONHECIMENTO;
-                sndData.acenderLeds = 0;
-                
-                qPut(sndData);
-            else
-                emit LED0(OFF);
-            end
-        with
-            await 10s;
-        end
-    end
+	loop do
+		par/and do
+			emit REQ_VOLTS();
+			var ushort voltagem = await VOLTS;
+			if voltagem > 1000 and destinatario != 0 then
+				var tipoMensagem msgEnviar;
+				msgEnviar.source = id;
+				msgEnviar.remetente = id;
+				msgEnviar.destinatario = destinatario;
+				msgEnviar.target = BROADCAST;
+				msgEnviar.type = TIPO_PEDIDO;
+				inc versao;
+				msgEnviar.versao = versao;
+				msgEnviar.direcao = DIR_SAIDA;
+				
+				melhorDistancia = 255;
+				melhorVizinho = 0;
+				leds = 0;
+				
+				qPut(msgEnviar);
+			end
+		with
+			await 10s;
+		end
+	end
 with
-    loop do
-        var usrMsg recData = await RECEIVE;
-        recData.direcao = DIR_ENTRADA;
-        qPut(recData);
-    end
+	loop do
+		par/and do
+			emit LED0(ON);
+			
+			emit REQ_PHOTO();
+			var ushort luminosidade = await PHOTO;
+			destinatario = (luminosidade/10);
+			
+			await 1s;
+			emit LED0(OFF);
+		with
+			await 20s;
+		end		
+	end
 with
-    loop do
+	loop do
+		par/and do
+			emit LED1(ON);
+			
+			emit REQ_TEMP();
+			var ushort temperatura = await TEMP;
+			acender_leds = ((temperatura/10)%10);
+			
+			await 1s;
+			emit LED1(OFF);
+		with
+			await 40s;
+		end
+	end
+with
+	loop do
+		var tipoMensagem msgRecebida = await RECEIVE;
+		msgRecebida.direcao = DIR_ENTRADA;
+		qPut(msgRecebida);
+	end
+with
+	loop do
+		emit LEDS(leds);
+		await 22s;
+	end
+with
+	loop do
         await Q_READY;
         loop do
             if qSize() == 0 then
                 break;
             end
-            var usrMsg recData;
-            qGet(recData);
-            if recData.direcao == DIR_SAIDA then
-                emit SEND(recData);
+            var tipoMensagem msg;
+            qGet(msg);
+            if msg.direcao == DIR_SAIDA then
+                emit SEND(msg);
                 await SEND_DONE;
             else
-                if recData.type == TIPO_RECONHECIMENTO then
-                    if recData.versao > versaoLocal then
-                        versaoLocal = recData.versao;
-                        menorDistancia = 10000;
-                        melhorVizinho = 0;
-                        acenderLeds = 0;
-                    end
-                    if recData.versao == versaoLocal then
-                        if recData.distancia < menorDistancia and recData.origem != nodeId then
-                            // Salva a menor distancia
-                            menorDistancia = recData.distancia;
-                            melhorVizinho = recData.source;
-                            
-                            // Prepara a mensagem para repassar aos proximos nós
-                            inc recData.distancia;
-                            recData.source = nodeId;
-                            recData.direcao = DIR_SAIDA;
-                            if nodeId == 11 then
-                                recData.target = melhorVizinho;
-                                recData.type = TIPO_MOSTRAR_CAMINHO;
-                                acenderLeds = 5;
-                                recData.acenderLeds = acenderLeds;
-                            end
-                            qPut(recData);
-                        end
-                    end
-                else/if recData.type == TIPO_MOSTRAR_CAMINHO then
-                    acenderLeds = recData.acenderLeds;
-                    if recData.origem != nodeId then
-                        recData.source = nodeId;
-                        recData.target = melhorVizinho;
-                        recData.direcao = DIR_SAIDA;
-                        qPut(recData);
-                    end
-                end
+            	if msg.type == TIPO_PEDIDO then
+            		if msg.versao > versao then
+            			versao = msg.versao;
+            			melhorDistancia = 255;
+						melhorVizinho = 0;
+						leds = 0;
+		        		if msg.destinatario == id then
+		        			msg.destinatario = msg.remetente;
+		        			msg.remetente = id;
+		        			msg.source = id;
+		        			msg.type = TIPO_RESPOSTA;
+		        			melhorDistancia = 0;
+		        			msg.distancia = 1;
+		        			msg.direcao = DIR_SAIDA;
+		        			qPut(msg);
+		        		else
+		        			emit LED2(ON);
+		        			await 1s;
+		        			
+		        			msg.source = id;
+		        			msg.direcao = DIR_SAIDA;
+		        			qPut(msg);
+		        			
+		        			emit LED2(OFF);
+		        		end
+            		end
+            	else/if msg.type == TIPO_RESPOSTA then
+            		if msg.distancia < melhorDistancia then
+            			melhorDistancia = msg.distancia;
+            			melhorVizinho = msg.source;
+		        		if msg.destinatario == id then
+		        			msg.destinatario = msg.remetente;
+		        			msg.remetente = id;
+		        			msg.source = id;
+		        			msg.type = TIPO_MOSTRAR_CAMINHO;
+		        			leds = acender_leds;
+		        			msg.acender_leds = leds;
+		        			msg.target = melhorVizinho;
+		        			msg.direcao = DIR_SAIDA;
+		        			qPut(msg);
+		        		else
+		        			emit LED2(ON);
+		        			await 1s;
+		        			
+		        			msg.source = id;
+		        			inc msg.distancia;
+		        			msg.direcao = DIR_SAIDA;
+		        			qPut(msg);
+		        			
+		        			emit LED2(OFF);
+		        		end
+            		end
+            	else/if msg.type == TIPO_MOSTRAR_CAMINHO then
+            		leds = msg.acender_leds;
+            		if msg.destinatario != id then
+            			msg.source = id;
+            			msg.target = melhorVizinho;
+            			msg.direcao = DIR_SAIDA;
+            			qPut(msg);
+            		end
+            	end
             end
-            await (nodeId) ms;
+            await (id) ms;
         end
-    end
-with
-    loop do
-        emit LEDS(acenderLeds);
-        await (nodeId*100) ms;
     end
 end

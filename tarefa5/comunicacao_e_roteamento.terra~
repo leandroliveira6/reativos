@@ -1,0 +1,171 @@
+#include "/home/terra/TerraNG/terra/TerraNet.defs"
+
+#define DIR_SAIDA 0
+#define DIR_ENTRADA 1
+#define TIPO_PEDIDO 0
+#define TIPO_RESPOSTA 1
+#define TIPO_MOSTRAR_CAMINHO 2
+
+pktype tipoMensagem from radioMsg with
+	var ushort versao;
+	var ushort remetente;
+	var ushort destinatario;
+	var ushort acender_leds;
+	var ubyte distancia;
+	var ubyte direcao;
+end
+
+var ushort id = getNodeId();
+var ushort versao = 0;
+var ushort destinatario = 0;
+var ushort acender_leds = 0;
+var ushort leds = 0;
+var ubyte melhorDistancia = 255;
+var ubyte melhorVizinho = 0;
+
+par do
+	loop do
+		par/and do
+			emit REQ_VOLTS();
+			var ushort voltagem = await VOLTS;
+			if voltagem > 1000 and destinatario != 0 then
+				var tipoMensagem msgEnviar;
+				msgEnviar.source = id;
+				msgEnviar.remetente = id;
+				msgEnviar.destinatario = destinatario;
+				msgEnviar.target = BROADCAST;
+				msgEnviar.type = TIPO_PEDIDO;
+				inc versao;
+				msgEnviar.versao = versao;
+				msgEnviar.direcao = DIR_SAIDA;
+				
+				melhorDistancia = 255;
+				melhorVizinho = 0;
+				leds = 0;
+				
+				qPut(msgEnviar);
+			end
+		with
+			await 10s;
+		end
+	end
+with
+	loop do
+		par/and do
+			emit LED0(ON);
+			
+			emit REQ_PHOTO();
+			var ushort luminosidade = await PHOTO;
+			destinatario = (luminosidade/10);
+			
+			await 1s;
+			emit LED0(OFF);
+		with
+			await 20s;
+		end		
+	end
+with
+	loop do
+		par/and do
+			emit LED1(ON);
+			
+			emit REQ_TEMP();
+			var ushort temperatura = await TEMP;
+			acender_leds = ((temperatura/10)%10);
+			
+			await 1s;
+			emit LED1(OFF);
+		with
+			await 40s;
+		end
+	end
+with
+	loop do
+		var tipoMensagem msgRecebida = await RECEIVE;
+		msgRecebida.direcao = DIR_ENTRADA;
+		qPut(msgRecebida);
+	end
+with
+	loop do
+		emit LEDS(leds);
+		await 22s;
+	end
+with
+	loop do
+        await Q_READY;
+        loop do
+            if qSize() == 0 then
+                break;
+            end
+            var tipoMensagem msg;
+            qGet(msg);
+            if msg.direcao == DIR_SAIDA then
+                emit SEND(msg);
+                await SEND_DONE;
+            else
+            	if msg.type == TIPO_PEDIDO then
+            		if msg.versao > versao then
+            			versao = msg.versao;
+            			melhorDistancia = 255;
+						melhorVizinho = 0;
+						leds = 0;
+		        		if msg.destinatario == id then
+		        			msg.destinatario = msg.remetente;
+		        			msg.remetente = id;
+		        			msg.source = id;
+		        			msg.type = TIPO_RESPOSTA;
+		        			melhorDistancia = 0;
+		        			msg.distancia = 1;
+		        			msg.direcao = DIR_SAIDA;
+		        			qPut(msg);
+		        		else
+		        			emit LED2(ON);
+		        			await 1s;
+		        			
+		        			msg.source = id;
+		        			msg.direcao = DIR_SAIDA;
+		        			qPut(msg);
+		        			
+		        			emit LED2(OFF);
+		        		end
+            		end
+            	else/if msg.type == TIPO_RESPOSTA then
+            		if msg.distancia < melhorDistancia then
+            			melhorDistancia = msg.distancia;
+            			melhorVizinho = msg.source;
+		        		if msg.destinatario == id then
+		        			msg.destinatario = msg.remetente;
+		        			msg.remetente = id;
+		        			msg.source = id;
+		        			msg.type = TIPO_MOSTRAR_CAMINHO;
+		        			leds = acender_leds;
+		        			msg.acender_leds = leds;
+		        			msg.target = melhorVizinho;
+		        			msg.direcao = DIR_SAIDA;
+		        			qPut(msg);
+		        		else
+		        			emit LED2(ON);
+		        			await 1s;
+		        			
+		        			msg.source = id;
+		        			inc msg.distancia;
+		        			msg.direcao = DIR_SAIDA;
+		        			qPut(msg);
+		        			
+		        			emit LED2(OFF);
+		        		end
+            		end
+            	else/if msg.type == TIPO_MOSTRAR_CAMINHO then
+            		leds = msg.acender_leds;
+            		if msg.destinatario != id then
+            			msg.source = id;
+            			msg.target = melhorVizinho;
+            			msg.direcao = DIR_SAIDA;
+            			qPut(msg);
+            		end
+            	end
+            end
+            await (id) ms;
+        end
+    end
+end
