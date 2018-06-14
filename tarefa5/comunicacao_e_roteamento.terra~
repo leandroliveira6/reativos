@@ -1,46 +1,62 @@
 #include "/home/terra/TerraNG/terra/TerraNet.defs"
 
+/*
+** Definições de tipos e direções de mensagens
+** Toda mensagem que chega é enfileirada após receber DIR_ENTRADA
+** Toda mensagem antes de ser enfileirada para envio recebe DIR_SAIDA
+*/
 #define DIR_SAIDA 0
 #define DIR_ENTRADA 1
-#define TIPO_PEDIDO 0
-#define TIPO_RESPOSTA 1
-#define TIPO_MOSTRAR_CAMINHO 2
+#define TIPO_PEDIDO 0			// É o tipo de mensagem que reseta as informações de leds e roteamento dos nós, alem de procurar o destinatario
+#define TIPO_RESPOSTA 1			// É o tipo de mensagem que o destinatario do pedido envia, estabelecendo o menor caminho da origem até ele
+#define TIPO_MOSTRAR_CAMINHO 2	// É o tipo de mensagem que contem quais leds o destinatario deverá acender, os nós do trajeto até o destinatario tambem acendem, mas temporariamente
 
+/*
+** Tipo de mensagem que generaliza todas as mensagens usadas na aplicação
+*/
 pktype tipoMensagem from radioMsg with
-	var ushort versao;
-	var ushort remetente;
-	var ushort destinatario;
-	var ushort acender_leds;
-	var ubyte distancia;
-	var ubyte direcao;
+	var ushort versao;			// Evida 'tempestade' na procura por um nó
+	var ushort remetente;		// Abriga o id do nó no pedido e o id do destinatario na resposta
+	var ushort destinatario;	// Abriga o id do destinatario no pedido e o id do nó do pedido na resposta
+	var ushort acender_leds;	// Contem o numero que estabelece quais leds do destinatario serão acesos, alem de acender tambem (temporariamente) os leds dos nós no trajeto entre o pedinte e o destinatario
+	var ubyte distancia;		// Basicamente abriga a distancia entre o destinatario e todos os outros nós nas mensagens de respostas. Tambem evita 'tempestade'
+	var ubyte direcao;			// Direção da mensagem, usada antes de enfileirar uma mensagem. Pode ser tanto DIR_SAIDA quanto DIR_ENTRADA, vai depender se o nó está recebendo ou querendo enviar a mensagem
 end
 
+/*
+** Variaveis globais da aplicação
+*/
 var ushort id = getNodeId();
 var ushort versao = 0;
-var ushort destinatario = 0;
-var ushort acender_leds = 0;
 var ushort leds = 0;
 var ubyte melhorDistancia = 255;
 var ubyte melhorVizinho = 0;
 
 par do
+	/*
+	** Trilha responsavel por verificar a voltagem, enviando pedidos de localização quando a mesma estiver acima do padrão (1000)
+	** É executada a cada 10s, no minimo
+	*/
 	loop do
 		par/and do
 			emit REQ_VOLTS();
 			var ushort voltagem = await VOLTS;
-			if voltagem > 1000 and destinatario != 0 then
+			if voltagem > 1000 then
+				emit REQ_PHOTO();
+				var ushort luminosidade = await PHOTO;
+				
 				var tipoMensagem msgEnviar;
 				msgEnviar.source = id;
 				msgEnviar.remetente = id;
-				msgEnviar.destinatario = destinatario;
+				msgEnviar.destinatario = (luminosidade/10);
 				msgEnviar.target = BROADCAST;
 				msgEnviar.type = TIPO_PEDIDO;
 				inc versao;
 				msgEnviar.versao = versao;
 				msgEnviar.direcao = DIR_SAIDA;
 				
+				// Essas variaveis sempre precisam ser zeradas ao iniciar um novo pedido, já que não serão tratadas em outras trilhas do nó pedinte
 				melhorDistancia = 255;
-				melhorVizinho = 0;
 				leds = 0;
 				
 				qPut(msgEnviar);
@@ -50,65 +66,53 @@ par do
 		end
 	end
 with
-	loop do
-		par/and do
-			emit LED0(ON);
-			
-			emit REQ_PHOTO();
-			var ushort luminosidade = await PHOTO;
-			destinatario = (luminosidade/10);
-			
-			await 1s;
-			emit LED0(OFF);
-		with
-			await 20s;
-		end		
-	end
-with
-	loop do
-		par/and do
-			emit LED1(ON);
-			
-			emit REQ_TEMP();
-			var ushort temperatura = await TEMP;
-			acender_leds = ((temperatura/10)%10);
-			
-			await 1s;
-			emit LED1(OFF);
-		with
-			await 40s;
-		end
-	end
-with
+	/*
+	** Trilha responsavel por receber e enfileirar as mensagens que chegam
+	** É executada sempre que uma mensagem chega
+	*/
 	loop do
 		var tipoMensagem msgRecebida = await RECEIVE;
 		msgRecebida.direcao = DIR_ENTRADA;
 		qPut(msgRecebida);
 	end
 with
+	/*
+	** Trilha responsavel por acender os leds solicitados pelo nó pedinte
+	** É executada a cada 10s
+	*/
 	loop do
 		emit LEDS(leds);
-		await 22s;
+		await 10s;
 	end
 with
+	/*
+	** Trilha responsavel por desenfileirar todas as mensagens, enviando diretamente caso seja de saida ou tratando caso seja de entrada
+	** É executada sempre que o evento Q_READY é acionado e se mantem executando a cada id*10 ms enquanto houver mensagens na fila
+	*/
 	loop do
+        var tipoMensagem msg;
         await Q_READY;
         loop do
             if qSize() == 0 then
                 break;
             end
-            var tipoMensagem msg;
             qGet(msg);
             if msg.direcao == DIR_SAIDA then
                 emit SEND(msg);
                 await SEND_DONE;
             else
+            	// Caso a mensagem seja de pedido, é verificado se o nó é ou não o destinatario, repassando a mensagem caso não seja ou respondendo caso seja
+            	// Só trata mensagens de versão superior a armazenada localmente
             	if msg.type == TIPO_PEDIDO then
             		if msg.versao > versao then
+            			emit LED2(ON);
+		        		await 1s;
+		        		
+		        		// Atualiza a versão local, reseta as variaveis de led e de roteamento
             			versao = msg.versao;
             			melhorDistancia = 255;
-						melhorVizinho = 0;
 						leds = 0;
+						
 		        		if msg.destinatario == id then
 		        			msg.destinatario = msg.remetente;
 		        			msg.remetente = id;
@@ -119,53 +123,62 @@ with
 		        			msg.direcao = DIR_SAIDA;
 		        			qPut(msg);
 		        		else
-		        			emit LED2(ON);
-		        			await 1s;
-		        			
 		        			msg.source = id;
 		        			msg.direcao = DIR_SAIDA;
 		        			qPut(msg);
-		        			
-		        			emit LED2(OFF);
 		        		end
+		        		
+		        		emit LED2(OFF);
             		end
+            	// Caso a mensagem seja de resposta, é verificado se o nó é o destinatario (pedinte), enviando a solicitação de acender leds se for ou repassando caso contrario, formando uma teia de melhores caminhos até o destinatario anterior (nó alvo do pedido principal)
+            	// Só trata mensagens onde a distancia seja menor que a registrada localmente, atualizando as informações em caso positivo
             	else/if msg.type == TIPO_RESPOSTA then
             		if msg.distancia < melhorDistancia then
+            			emit LED2(ON);
+		        		await 1s;
+		        		
             			melhorDistancia = msg.distancia;
             			melhorVizinho = msg.source;
 		        		if msg.destinatario == id then
+		        			emit REQ_TEMP();
+							var ushort temperatura = await TEMP;
+							
 		        			msg.destinatario = msg.remetente;
 		        			msg.remetente = id;
 		        			msg.source = id;
 		        			msg.type = TIPO_MOSTRAR_CAMINHO;
-		        			leds = acender_leds;
-		        			msg.acender_leds = leds;
+		        			msg.acender_leds = ((temperatura/10)%10);
 		        			msg.target = melhorVizinho;
 		        			msg.direcao = DIR_SAIDA;
 		        			qPut(msg);
 		        		else
-		        			emit LED2(ON);
-		        			await 1s;
-		        			
 		        			msg.source = id;
 		        			inc msg.distancia;
 		        			msg.direcao = DIR_SAIDA;
 		        			qPut(msg);
-		        			
-		        			emit LED2(OFF);
 		        		end
+		        		
+		        		emit LED2(OFF);
             		end
+            	// Caso a mensagem seja de mostrar caminho, será armazenado o numero que determina quais leds serão acesos, descartando após alguns segundos acesos caso o nó não seja o destinatario da mensagem e mantendo os leds acesos caso contrario
             	else/if msg.type == TIPO_MOSTRAR_CAMINHO then
             		leds = msg.acender_leds;
+            		emit LEDS(leds);
+            		
             		if msg.destinatario != id then
+            			leds = 0;
+            			await 1s;
+            			
             			msg.source = id;
             			msg.target = melhorVizinho;
             			msg.direcao = DIR_SAIDA;
             			qPut(msg);
+            			
+            			emit LEDS(OFF);
             		end
             	end
             end
-            await (id) ms;
+            await (id*10) ms;
         end
     end
 end
