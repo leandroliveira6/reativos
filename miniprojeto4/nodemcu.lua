@@ -1,3 +1,5 @@
+print("r")
+
 -- Variaveis globais da aplicacao
 local wifi_usuario = ""
 local wifi_senha = ""
@@ -101,8 +103,10 @@ local criar_webserver = function()
             end
             if (get.pin == "toggle_led1") then
                 estado_led1 = toggle_led(estado_led1, led1)
+                print("a")
             elseif (get.pin == "toggle_led2") then
                 estado_led2 = toggle_led(estado_led2, led2)
+                print("b")
             end
             client:send(configurar_pagina())
             client:close()
@@ -119,6 +123,7 @@ local setup = function()
     gpio.mode(led2, gpio.OUTPUT)
     configurar_wifi()
     criar_webserver()
+    print("i")
 end
 
 setup()
