@@ -1,5 +1,3 @@
-print("r")
-
 -- Variaveis globais da aplicacao
 local wifi_usuario = ""
 local wifi_senha = ""
@@ -57,19 +55,10 @@ end
 ---- Funcao de criacao da pagina html do webserver
 local configurar_pagina = function()
     local pagina = "<h1>NODE Web Server</h1>"
-    local comando = ""
-    if (estado_led1 == gpio.LOW) then
-        comando = "Ligar"
-    else
-        comando = "Desligar"
-    end
-    pagina = pagina.."<p>LED1 <a href=\"?pin=toggle_led1\"><button>" .. comando .. "</button></a></p>"
-    if (estado_led2 == gpio.LOW) then
-        comando = "Ligar"
-    else
-        comando = "Desligar"
-    end
-    pagina = pagina.."<p>LED2 <a href=\"?pin=toggle_led2\"><button>" .. comando .. "</button></a></p>"
+    pagina = pagina.."<p style=\"margin-left: 50px;\">Mudar Posição do Servo</p>"
+    pagina = pagina .. "<a href=\"?pin=horario\" style=\"margin-left: 10px; margin-right:10px;\"><button>Horario</button></a>"
+    pagina = pagina .. "<a href=\"?pin=meio\" style=\"margin-left: 10px; margin-right:10px;\"><button>Voltar p/ Meio</button></a>"
+    pagina = pagina .. "<a href=\"?pin=antihorario\" style=\"margin-left: 20px;\"><button>Anti-Horario</button></a>"  
     return pagina
 end
 
@@ -101,15 +90,19 @@ local criar_webserver = function()
                     get[k] = v
                 end
             end
-            if (get.pin == "toggle_led1") then
+            if (get.pin == "horario") then
                 estado_led1 = toggle_led(estado_led1, led1)
-                print("a")
-            elseif (get.pin == "toggle_led2") then
-                estado_led2 = toggle_led(estado_led2, led2)
-                print("b")
+                print("+")
+            elseif (get.pin == "meio") then
+                estado_led1 = toggle_led(estado_led1, led1)
+                print("M")
+            elseif (get.pin == "antihorario") then
+                estado_led1 = toggle_led(estado_led1, led1)
+                print("-")
             end
-            client:send(configurar_pagina())
-            client:close()
+            client:send(configurar_pagina(), function()
+                client:close()
+            end)
             collectgarbage()
         end
         conn:on("receive", receive_callback)
@@ -123,7 +116,6 @@ local setup = function()
     gpio.mode(led2, gpio.OUTPUT)
     configurar_wifi()
     criar_webserver()
-    print("i")
 end
 
 setup()
